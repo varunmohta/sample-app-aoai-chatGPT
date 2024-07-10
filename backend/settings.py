@@ -63,6 +63,7 @@ class _ChatHistorySettings(BaseSettings):
     account_key: Optional[str] = None
     conversations_container: str
     enable_feedback: bool = False
+    all_conversations_container: str
 
 
 class _PromptflowSettings(BaseSettings):
