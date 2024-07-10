@@ -173,6 +173,7 @@ def init_cosmosdb_client():
                 database_name=app_settings.chat_history.database,
                 container_name=app_settings.chat_history.conversations_container,
                 enable_message_feedback=app_settings.chat_history.enable_feedback,
+                all_conversation_container_name=app_settings.chat_history.all_conversations_container,
             )
         except Exception as e:
             logging.exception("Exception in CosmosDB initialization", e)
