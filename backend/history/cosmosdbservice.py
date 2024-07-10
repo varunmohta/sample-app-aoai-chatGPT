@@ -5,11 +5,12 @@ from azure.cosmos import exceptions
   
 class CosmosConversationClient():
     
-    def __init__(self, cosmosdb_endpoint: str, credential: any, database_name: str, container_name: str, enable_message_feedback: bool = False):
+    def __init__(self, cosmosdb_endpoint: str, credential: any, database_name: str, container_name: str,all_conversation_container_name: str, enable_message_feedback: bool = False):
         self.cosmosdb_endpoint = cosmosdb_endpoint
         self.credential = credential
         self.database_name = database_name
         self.container_name = container_name
+        self.all_conversation_container_name=all_conversation_container_name
         self.enable_message_feedback = enable_message_feedback
         try:
             self.cosmosdb_client = CosmosClient(self.cosmosdb_endpoint, credential=credential)
@@ -26,12 +27,13 @@ class CosmosConversationClient():
         
         try:
             self.container_client = self.database_client.get_container_client(container_name)
+            self.all_conversation_container_client = self.database_client.get_container_client(all_conversation_container_name)
         except exceptions.CosmosResourceNotFoundError:
             raise ValueError("Invalid CosmosDB container name") 
         
 
     async def ensure(self):
-        if not self.cosmosdb_client or not self.database_client or not self.container_client:
+        if not self.cosmosdb_client or not self.database_client or not self.container_client or not self.all_conversation_container_client:
             return False, "CosmosDB client not initialized correctly"
         try:
             database_info = await self.database_client.read()
@@ -42,6 +44,11 @@ class CosmosConversationClient():
             container_info = await self.container_client.read()
         except:
             return False, f"CosmosDB container {self.container_name} not found"
+        
+        try:
+            all_conversation_container_info = await self.all_conversation_container_client.read()
+        except:
+            return False, f"CosmosDB container {self.all_conversation_container_name} not found"
             
         return True, "CosmosDB client initialized successfully"
 
@@ -55,15 +62,17 @@ class CosmosConversationClient():
             'title': title
         }
         ## TODO: add some error handling based on the output of the upsert_item call
-        resp = await self.container_client.upsert_item(conversation)  
-        if resp:
+        resp = await self.container_client.upsert_item(conversation)
+        all_conversation_resp = await self.all_conversation_container_client.upsert_item(conversation)
+        if resp and all_conversation_resp:
             return resp
         else:
             return False
-    
-    async def upsert_conversation(self, conversation):
+        
+    async def upsert_conversation(self, conversation,all_conversation):
         resp = await self.container_client.upsert_item(conversation)
-        if resp:
+        all_conversation_resp = await self.all_conversation_container_client.upsert_item(all_conversation)
+        if resp and all_conversation_resp:
             return resp
         else:
             return False
@@ -126,6 +135,28 @@ class CosmosConversationClient():
             return None
         else:
             return conversations[0]
+    
+    async def get_all_conversation(self, user_id, conversation_id):
+        parameters = [
+            {
+                'name': '@conversationId',
+                'value': conversation_id
+            },
+            {
+                'name': '@userId',
+                'value': user_id
+            }
+        ]
+        query = f"SELECT * FROM c where c.id = @conversationId and c.type='conversation' and c.userId = @userId"
+        conversations = []
+        async for item in self.all_conversation_container_client.query_items(query=query, parameters=parameters):
+            conversations.append(item)
+
+        ## if no conversations are found, return None
+        if len(conversations) == 0:
+            return None
+        else:
+            return conversations[0]
  
     async def create_message(self, uuid, conversation_id, user_id, input_message: dict):
         message = {
@@ -143,13 +174,16 @@ class CosmosConversationClient():
             message['feedback'] = ''
         
         resp = await self.container_client.upsert_item(message)  
-        if resp:
+        all_conversation_resp = await self.all_conversation_container_client.upsert_item(message)  
+        if resp and all_conversation_resp:
             ## update the parent conversations's updatedAt field with the current message's createdAt datetime value
             conversation = await self.get_conversation(user_id, conversation_id)
-            if not conversation:
+            all_conversation = await self.get_all_conversation(user_id, conversation_id)
+            if not conversation and not all_conversation:
                 return "Conversation not found"
             conversation['updatedAt'] = message['createdAt']
-            await self.upsert_conversation(conversation)
+            all_conversation['updatedAt'] = message['createdAt']
+            await self.upsert_conversation(conversation,all_conversation)
             return resp
         else:
             return False
